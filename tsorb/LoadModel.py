@@ -356,8 +356,8 @@ class LightingModel(object):
             _GHI = weather_data["GHI"].tz_localize(None)
             freq = _GHI.index[1] - _GHI.index[0]
             # add values in the beginning and end to extrapolate
-            startVal = pd.Series(_GHI[0], index=[_GHI.index[0] - freq])
-            endVal = pd.Series(_GHI[-1], index=[_GHI.index[-1] + freq])
+            startVal = pd.Series(_GHI.iloc[0], index=[_GHI.index[0] - freq])
+            endVal = pd.Series(_GHI.iloc[-1], index=[_GHI.index[-1] + freq])
             _GHI_extended = pd.concat([startVal, _GHI, endVal])
             _GHI_minute = _GHI_extended.resample("1min", label="left", closed="left").mean().interpolate()
             self._irradiance = _GHI_minute
@@ -472,7 +472,7 @@ class LightingModel(object):
         x = 0
         bulbs_number_rand = np.random.normal(25, 4.426778, 1)
         bulbs_number_rand = bulbs_number_rand.round(0)
-        bulbs_number_rand_i = int(bulbs_number_rand)
+        bulbs_number_rand_i = int(bulbs_number_rand.item())
         # create List with i numbers of bulbs to put on configuration
         bulb_config = list(range(bulbs_number_rand_i))
 

@@ -8,10 +8,12 @@ __enercore_cache__/
 .idea/
 .eggs/
 dist
+.venv/
 
 # file types to ignore
 *.pyc
 *.egg-info
+.coverage
 *.png
 *.log
 *.orig
