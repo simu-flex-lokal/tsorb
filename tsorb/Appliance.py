@@ -1,4 +1,3 @@
-from __future__ import division
 from tsorb.Load import Load
 from tsorb.utils.Calculations import Calculations
 import numpy as np
