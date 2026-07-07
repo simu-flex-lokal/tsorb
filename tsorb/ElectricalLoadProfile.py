@@ -208,7 +208,7 @@ class ElectricalLoadProfile(object):
             self.load_resolved = pd.DataFrame(
                 appload.T,
                 index=pd.date_range(
-                    start=pd.datetime(year, 1, 1),
+                    start=pd.Timestamp(year, 1, 1),
                     periods=len(self.total_load),
                     freq="1min",
                 ),
@@ -235,13 +235,13 @@ class ElectricalLoadProfile(object):
             if self.resample_mean:
                 return self.load_resolved.resample(self.freq).mean()
             else:
-                return self.load_resolved.resample(self.freq).pad()
+                return self.load_resolved.resample(self.freq).ffill()
         else:
             index_1 = pd.date_range(
-                start=pd.datetime(year, 1, 1), periods=len(self.total_load), freq="1min"
+                start=pd.Timestamp(year, 1, 1), periods=len(self.total_load), freq="1min"
             )
             index_10 = pd.date_range(
-                start=pd.datetime(year, 1, 1), periods=len(self.occ_active), freq="10min"
+                start=pd.Timestamp(year, 1, 1), periods=len(self.occ_active), freq="10min"
             )
 
             profiles = pd.DataFrame([])
@@ -269,27 +269,27 @@ class ElectricalLoadProfile(object):
                 )
             else:
                 profiles["Load"] = (
-                    pd.Series(self.total_load, index=index_1).resample(self.freq).pad()
+                    pd.Series(self.total_load, index=index_1).resample(self.freq).ffill()
                 )
                 profiles["AppHeatGain"] = (
-                    pd.Series(self.app_heat_gain, index=index_1).resample(self.freq).pad()
+                    pd.Series(self.app_heat_gain, index=index_1).resample(self.freq).ffill()
                 )
                 profiles["OccActive"] = (
                     pd.Series(self.occ_active, index=index_10)
                     .astype(int)
                     .resample(self.freq)
-                    .pad()
+                    .ffill()
                 )
                 profiles["OccNotActive"] = (
                     pd.Series(self.occ_not_active, index=index_10)
                     .astype(int)
                     .resample(self.freq)
-                    .pad()
+                    .ffill()
                 )
 
             if self.get_hot_water:
                 profiles["HotWater"] = (
-                    pd.Series(self.hotWater, index=index_1).resample(self.freq).pad()
+                    pd.Series(self.hotWater, index=index_1).resample(self.freq).ffill()
                 )
 
             return profiles
