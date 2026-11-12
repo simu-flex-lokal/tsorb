@@ -74,7 +74,7 @@ class ElectricalLoadProfile(object):
             get_hot_water=self.get_hot_water,
         )
 
-        self._run_for_year = True
+        self._simulated = None
 
     def run(self, year, day_of_week, day_in_year):
         """
@@ -139,16 +139,63 @@ class ElectricalLoadProfile(object):
             start=str(year), end=str(int(year) + 1), freq="D", tz="Europe/Berlin"
         )[:-1]
 
-        number_days_in_year = len(days)
-        # build an empty numpy array to later save the total_consumption
-        self.total_load = np.empty(1440 * number_days_in_year, dtype=float)
-        self.app_heat_gain = np.empty(1440 * number_days_in_year, dtype=float)
-        self.occ_active = np.empty(144 * number_days_in_year, dtype=float)
-        self.occ_not_active = np.empty(144 * number_days_in_year, dtype=float)
-        if self.get_hot_water:
-            self.hotWater = np.empty(1440 * number_days_in_year, dtype=float)
+        result = self._run_days(year, days)
+        self._simulated = year
+        return result
 
-        self.light = np.empty(1440 * number_days_in_year, dtype=float)  # Test Lighting
+    def run_for_period(self, start, end):
+        """
+        Runs the Electrical Load Profile for whole calendar days within one
+        year. Weekday/weekend and the seasonal correction follow the calendar.
+        -----------------------------------------------------------------------
+        Parameters:
+            start: str or pandas.Timestamp, required
+                First day of the period.
+            end: str or pandas.Timestamp, required
+                Last day of the period, included.
+        -----------------------------------------------------------------------
+        Returns:
+            totalLoad: numpy array
+                Numpy array with the electrical energy demand of the period
+                with a minutewise resolution.
+        """
+        first, last = pd.Timestamp(start).normalize(), pd.Timestamp(end).normalize()
+        if last < first:
+            raise ValueError("The period ends before it starts: {} to {}".format(start, end))
+        # The lighting model looks its irradiance up by year and day of year.
+        if first.year != last.year:
+            raise ValueError("The period has to stay within one year: {} to {}".format(start, end))
+
+        days = pd.date_range(start=first, end=last, freq="D", tz="Europe/Berlin")
+        result = self._run_days(first.year, days)
+        self._simulated = (first, last)
+        return result
+
+    def _run_days(self, year, days):
+        """
+        Simulates the given consecutive calendar days and stores their series.
+        Occupancy and appliance states carry over from one day to the next.
+        -----------------------------------------------------------------------
+        Parameters:
+            year: int, required
+                Year the days belong to.
+            days: pandas.DatetimeIndex, required
+                The days to simulate, localized to Europe/Berlin.
+        -----------------------------------------------------------------------
+        Returns:
+            totalLoad: numpy array, or a pandas.DataFrame per appliance when
+                the load is resolved.
+        """
+        number_of_days = len(days)
+        # build an empty numpy array to later save the total_consumption
+        self.total_load = np.empty(1440 * number_of_days, dtype=float)
+        self.app_heat_gain = np.empty(1440 * number_of_days, dtype=float)
+        self.occ_active = np.empty(144 * number_of_days, dtype=float)
+        self.occ_not_active = np.empty(144 * number_of_days, dtype=float)
+        if self.get_hot_water:
+            self.hotWater = np.empty(1440 * number_of_days, dtype=float)
+
+        self.light = np.empty(1440 * number_of_days, dtype=float)  # Test Lighting
 
         # coefficients for seasonal correction
         z = [
@@ -164,11 +211,11 @@ class ElectricalLoadProfile(object):
 
         if self.resolved_load:
             appload = np.empty(
-                [len(self.app_model.loads), 1440 * number_days_in_year], dtype=float
+                [len(self.app_model.loads), 1440 * number_of_days], dtype=float
             )
             app_names = [load.get_key for load in self.app_model.loads]
 
-        # Loop through every day in the chosen year
+        # Loop through every day
         for ii, day in enumerate(days):
             # Differentiate between weekday or weekendday
             if day.dayofweek in (5, 6):
@@ -180,7 +227,7 @@ class ElectricalLoadProfile(object):
             f = sum(coeff * (day.dayofyear ** pot) for pot, coeff in enumerate(z[::-1]))
 
             # start the run function for the given day
-            self.run(year, day_of_week, day_in_year=ii + 1)
+            self.run(year, day_of_week, day_in_year=day.dayofyear)
             # Save the total_consumption in the totalLoad
             self.total_load[1440 * ii : 1440 * (ii + 1)] = self.total_consumption * f
             self.app_heat_gain[1440 * ii : 1440 * (ii + 1)] = self.total_heat_gain * f
@@ -202,13 +249,11 @@ class ElectricalLoadProfile(object):
                 self.lig_model.total_consumption * f
             )
 
-        self._run_for_year = year
-
         if self.resolved_load:
             self.load_resolved = pd.DataFrame(
                 appload.T,
                 index=pd.date_range(
-                    start=pd.Timestamp(year, 1, 1),
+                    start=days[0].tz_localize(None),
                     periods=len(self.total_load),
                     freq="1min",
                 ),
@@ -228,9 +273,47 @@ class ElectricalLoadProfile(object):
         occNotActive), reschedules them to the frequencies and returns them
         as pandas.DataFrame
         """
-        if not self._run_for_year == year:
+        if not self._simulated == year:
             self.run_for_year(year)
 
+        # Point-sampled hot water is what the cached yearly profiles of tsib
+        # were generated with, so the yearly path has to keep it.
+        return self._rescheduled(pd.Timestamp(year, 1, 1), hot_water_mean=False)
+
+    def get_period_profiles(self, start, end):
+        """
+        Gets the same profiles as `get_rescheduled_profiles` for whole calendar
+        days from start to end, included, indexed from the first day. With
+        `resample_mean` the hot water is averaged too, which keeps its energy.
+        -----------------------------------------------------------------------
+        Parameters:
+            start: str or pandas.Timestamp, required
+                First day of the period.
+            end: str or pandas.Timestamp, required
+                Last day of the period, included.
+        -----------------------------------------------------------------------
+        Returns:
+            profiles as pandas.DataFrame
+        """
+        first, last = pd.Timestamp(start).normalize(), pd.Timestamp(end).normalize()
+        if not self._simulated == (first, last):
+            self.run_for_period(first, last)
+
+        return self._rescheduled(first, hot_water_mean=self.resample_mean)
+
+    def _rescheduled(self, start, hot_water_mean):
+        """
+        Resamples the simulated minute series to the requested frequency.
+        -----------------------------------------------------------------------
+        Parameters:
+            start: pandas.Timestamp, required
+                Timestamp of the first simulated minute.
+            hot_water_mean: bool, required
+                Whether the hot water is averaged rather than point-sampled.
+        -----------------------------------------------------------------------
+        Returns:
+            profiles as pandas.DataFrame
+        """
         if self.resolved_load:
             if self.resample_mean:
                 return self.load_resolved.resample(self.freq).mean()
@@ -238,10 +321,10 @@ class ElectricalLoadProfile(object):
                 return self.load_resolved.resample(self.freq).ffill()
         else:
             index_1 = pd.date_range(
-                start=pd.Timestamp(year, 1, 1), periods=len(self.total_load), freq="1min"
+                start=start, periods=len(self.total_load), freq="1min"
             )
             index_10 = pd.date_range(
-                start=pd.Timestamp(year, 1, 1), periods=len(self.occ_active), freq="10min"
+                start=start, periods=len(self.occ_active), freq="10min"
             )
 
             profiles = pd.DataFrame([])
@@ -288,8 +371,7 @@ class ElectricalLoadProfile(object):
                 )
 
             if self.get_hot_water:
-                profiles["HotWater"] = (
-                    pd.Series(self.hotWater, index=index_1).resample(self.freq).ffill()
-                )
+                hot_water = pd.Series(self.hotWater, index=index_1).resample(self.freq)
+                profiles["HotWater"] = hot_water.mean() if hot_water_mean else hot_water.ffill()
 
             return profiles
